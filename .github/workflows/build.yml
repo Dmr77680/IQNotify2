@@ -15,12 +15,24 @@ jobs:
         run: |
           xcodebuild -project IQNotify.xcodeproj \
             -scheme IQNotify \
-            -configuration Release \
+            -configuration Debug \
             -archivePath build/IQNotify.xcarchive \
             archive \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            OTHER_CODE_SIGN_FLAGS="--entitlements entitlements.plist"
+          
+          cat > entitlements.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>get-task-allow</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
           
           mkdir -p build/IQNotify.xcarchive/Products/Applications
           cd build
