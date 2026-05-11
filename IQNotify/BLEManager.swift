@@ -1,204 +1,167 @@
-import Foundation
+import SwiftUI
 import CoreBluetooth
 import UserNotifications
 
-let SERVICE_AE30 = CBUUID(string: "AE30")
-let CHAR_AE01_WRITE = CBUUID(string: "AE01")
-let CHAR_AE02_NOTIFY = CBUUID(string: "AE02")
-let CHAR_AE03_WRITE = CBUUID(string: "AE03")
-let CHAR_AE04_NOTIFY = CBUUID(string: "AE04")
-let CHAR_AE05_INDICATE = CBUUID(string: "AE05")
-let CHAR_AE10_RW = CBUUID(string: "AE10")
-
-let SERVICE_AE3A = CBUUID(string: "AE3A")
-let CHAR_AE3B_WRITE = CBUUID(string: "AE3B")
-let CHAR_AE3C_NOTIFY = CBUUID(string: "AE3C")
-
-let WATCH_NAME = "QW01s"
-
-class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+struct ContentView: View {
+    @StateObject private var bleManager = BLEManager()
+    @State private var selectedTab = 0
     
-    @Published var isConnected = false
-    @Published var isScanning = false
-    @Published var notificationsEnabled = false
-    @Published var logs: [String] = []
-    
-    private var centralManager: CBCentralManager!
-    private var watchPeripheral: CBPeripheral?
-    private var writeCharacteristic: CBCharacteristic?
-    private var notifyCharacteristic: CBCharacteristic?
-    
-    override init() {
-        super.init()
-        centralManager = CBCentralManager(delegate: self, queue: nil)
-        setupNotificationObserver()
-    }
-    
-    func addLog(_ message: String) {
-        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        DispatchQueue.main.async {
-            self.logs.append("[\(timestamp)] \(message)")
-            if self.logs.count > 100 { self.logs.removeFirst() }
-        }
-    }
-    
-    func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
-            DispatchQueue.main.async {
-                self.notificationsEnabled = granted
-                self.addLog(granted ? "✅ Notifications accordées" : "❌ Notifications refusées")
+    var body: some View {
+        NavigationView {
+            TabView(selection: $selectedTab) {
+                
+                // MARK: - Tab 1: Connexion
+                VStack(spacing: 16) {
+                    VStack(spacing: 12) {
+                        Image(systemName: bleManager.isConnected ? "applewatch.radiowaves.left.and.right" : "applewatch.slash")
+                            .font(.system(size: 60))
+                            .foregroundColor(bleManager.isConnected ? .green : .gray)
+                        Text(bleManager.isConnected ? "Montre connectée ✅" : "Montre déconnectée")
+                            .font(.title2).fontWeight(.semibold)
+                        Text("QW01s-5C4F")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                    .padding(20)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(20)
+                    
+                    Button(action: {
+                        if bleManager.isConnected { bleManager.disconnect() }
+                        else { bleManager.startScanning() }
+                    }) {
+                        HStack {
+                            Image(systemName: bleManager.isScanning ? "antenna.radiowaves.left.and.right" : (bleManager.isConnected ? "xmark.circle" : "magnifyingglass"))
+                            Text(bleManager.isScanning ? "Recherche..." : (bleManager.isConnected ? "Déconnecter" : "Connecter la montre"))
+                        }
+                        .frame(maxWidth: .infinity).padding()
+                        .background(bleManager.isConnected ? Color.red : Color.blue)
+                        .foregroundColor(.white).cornerRadius(14)
+                    }
+                    
+                    Button(action: { bleManager.requestNotificationPermission() }) {
+                        HStack {
+                            Image(systemName: bleManager.notificationsEnabled ? "bell.fill" : "bell.slash")
+                            Text(bleManager.notificationsEnabled ? "Notifications activées" : "Activer les notifications")
+                        }
+                        .frame(maxWidth: .infinity).padding()
+                        .background(bleManager.notificationsEnabled ? Color.green : Color.orange)
+                        .foregroundColor(.white).cornerRadius(14)
+                    }
+                    
+                    // Log
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Journal").font(.headline)
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 2) {
+                                ForEach(bleManager.logs.reversed(), id: \.self) { log in
+                                    Text(log).font(.system(size: 10, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        .frame(height: 180)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(12)
+                    }
+                    Spacer()
+                }
+                .padding()
+                .tabItem { Label("Connexion", systemImage: "antenna.radiowaves.left.and.right") }
+                .tag(0)
+                
+                // MARK: - Tab 2: Test Protocoles
+                VStack(spacing: 12) {
+                    Text("Test protocoles")
+                        .font(.title2).fontWeight(.bold)
+                    Text("Appuie sur chaque format et vérifie si ta montre réagit")
+                        .font(.caption).foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    
+                    ScrollView {
+                        VStack(spacing: 10) {
+                            ForEach(0..<bleManager.protocols.count, id: \.self) { i in
+                                let p = bleManager.protocols[i]
+                                Button(action: { bleManager.sendProtocolTest(index: i) }) {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Format \(i+1) — \(p.name)")
+                                                .font(.subheadline).fontWeight(.semibold)
+                                                .foregroundColor(.white)
+                                            Text(p.description)
+                                                .font(.caption)
+                                                .foregroundColor(.white.opacity(0.8))
+                                        }
+                                        Spacer()
+                                        Image(systemName: "play.fill")
+                                            .foregroundColor(.white)
+                                    }
+                                    .padding()
+                                    .background(p.color)
+                                    .cornerRadius(12)
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                    Spacer()
+                }
+                .padding(.top)
+                .tabItem { Label("Protocoles", systemImage: "wrench.and.screwdriver") }
+                .tag(1)
+                
+                // MARK: - Tab 3: Apps
+                VStack(spacing: 12) {
+                    Text("Test par app")
+                        .font(.title2).fontWeight(.bold)
+                    Text("Teste l'envoi de notification pour chaque app")
+                        .font(.caption).foregroundColor(.secondary)
+                    
+                    ScrollView {
+                        VStack(spacing: 10) {
+                            ForEach(["WhatsApp", "Discord", "Messages", "Mail", "Telegram", "Instagram", "Twitter", "Snapchat", "Gmail", "Outlook"], id: \.self) { app in
+                                Button(action: { bleManager.sendTestNotification(appName: app) }) {
+                                    HStack {
+                                        Text(appEmoji(app))
+                                            .font(.title2)
+                                        Text(app)
+                                            .font(.subheadline).fontWeight(.semibold)
+                                        Spacer()
+                                        Image(systemName: "paperplane.fill")
+                                            .foregroundColor(.blue)
+                                    }
+                                    .padding()
+                                    .background(Color(.systemGray6))
+                                    .cornerRadius(12)
+                                }
+                                .foregroundColor(.primary)
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                    Spacer()
+                }
+                .padding(.top)
+                .tabItem { Label("Apps", systemImage: "bell.badge") }
+                .tag(2)
             }
+            .navigationTitle("IQNotify")
         }
+        .onAppear { bleManager.requestNotificationPermission() }
     }
     
-    func setupNotificationObserver() {
-        NotificationCenter.default.addObserver(self, selector: #selector(handleAppNotification(_:)), name: NSNotification.Name("NewNotificationReceived"), object: nil)
-    }
-    
-    @objc func handleAppNotification(_ notification: Foundation.Notification) {
-        guard let userInfo = notification.userInfo,
-              let appName = userInfo["appName"] as? String,
-              let title = userInfo["title"] as? String,
-              let body = userInfo["body"] as? String else { return }
-        sendNotificationToWatch(appName: appName, title: title, body: body)
-    }
-    
-    func startScanning() {
-        guard centralManager.state == .poweredOn else { addLog("⚠️ Bluetooth non disponible"); return }
-        addLog("🔍 Recherche de la montre QW01s...")
-        DispatchQueue.main.async { self.isScanning = true }
-        centralManager.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-            if !self.isConnected {
-                self.centralManager.stopScan()
-                DispatchQueue.main.async { self.isScanning = false }
-                self.addLog("⏱ Scan terminé — montre non trouvée")
-            }
+    func appEmoji(_ app: String) -> String {
+        switch app {
+        case "WhatsApp": return "💬"
+        case "Discord": return "🎮"
+        case "Messages": return "✉️"
+        case "Mail": return "📧"
+        case "Telegram": return "✈️"
+        case "Instagram": return "📸"
+        case "Twitter": return "🐦"
+        case "Snapchat": return "👻"
+        case "Gmail": return "📨"
+        case "Outlook": return "📅"
+        default: return "🔔"
         }
-    }
-    
-    func disconnect() {
-        if let peripheral = watchPeripheral { centralManager.cancelPeripheralConnection(peripheral) }
-    }
-    
-    func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        switch central.state {
-        case .poweredOn: addLog("✅ Bluetooth activé")
-        case .poweredOff: addLog("❌ Bluetooth désactivé")
-        default: break
-        }
-    }
-    
-    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        guard let name = peripheral.name, name.contains(WATCH_NAME) else { return }
-        addLog("📡 Montre trouvée: \(name)")
-        centralManager.stopScan()
-        DispatchQueue.main.async { self.isScanning = false }
-        watchPeripheral = peripheral
-        peripheral.delegate = self
-        centralManager.connect(peripheral, options: nil)
-    }
-    
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        addLog("✅ Connecté à \(peripheral.name ?? "montre")")
-        DispatchQueue.main.async { self.isConnected = true }
-        peripheral.discoverServices([SERVICE_AE30, SERVICE_AE3A])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { self.sendHandshake() }
-    }
-    
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        addLog("🔌 Déconnecté de la montre")
-        DispatchQueue.main.async { self.isConnected = false; self.writeCharacteristic = nil; self.notifyCharacteristic = nil }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.addLog("🔄 Tentative de reconnexion..."); self.startScanning() }
-    }
-    
-    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        addLog("❌ Echec connexion: \(error?.localizedDescription ?? "inconnu")")
-        DispatchQueue.main.async { self.isConnected = false }
-    }
-    
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let services = peripheral.services else { return }
-        for service in services { addLog("🔧 Service: \(service.uuid)"); peripheral.discoverCharacteristics(nil, for: service) }
-    }
-    
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard let characteristics = service.characteristics else { return }
-        for char in characteristics {
-            switch char.uuid {
-            case CHAR_AE01_WRITE: writeCharacteristic = char; addLog("✅ Canal écriture AE01 prêt")
-            case CHAR_AE02_NOTIFY: notifyCharacteristic = char; peripheral.setNotifyValue(true, for: char); addLog("✅ Canal notification AE02 activé")
-            case CHAR_AE04_NOTIFY, CHAR_AE05_INDICATE, CHAR_AE3C_NOTIFY: peripheral.setNotifyValue(true, for: char)
-            default: break
-            }
-        }
-    }
-    
-    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard let data = characteristic.value else { return }
-        let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        addLog("📥 Reçu sur \(characteristic.uuid): \(hex)")
-    }
-    
-    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        if let error = error { addLog("❌ Erreur écriture: \(error.localizedDescription)") }
-    }
-    
-    func sendHandshake() {
-        let commands: [[UInt8]] = [
-            [0xAB, 0x00, 0x04, 0xFF, 0x31, 0x00, 0x00],
-            [0xAB, 0x00, 0x04, 0xFF, 0x93, 0x00, 0x00],
-            [0x01, 0x00, 0x00, 0x00],
-        ]
-        for (index, cmd) in commands.enumerated() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.5) { self.writeToWatch(bytes: cmd) }
-        }
-    }
-    
-    func writeToWatch(bytes: [UInt8]) {
-        guard let peripheral = watchPeripheral, let characteristic = writeCharacteristic else { addLog("⚠️ Montre non connectée"); return }
-        let data = Data(bytes)
-        let hex = bytes.map { String(format: "%02X", $0) }.joined(separator: " ")
-        addLog("📤 Envoi: \(hex)")
-        peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
-    }
-    
-    func sendNotificationToWatch(appName: String, title: String, body: String) {
-        guard isConnected else { addLog("⚠️ Montre non connectée — notification ignorée"); return }
-        addLog("🔔 Notification: [\(appName)] \(title)")
-        let appId: UInt8 = appIDForApp(appName)
-        let titleData = Array(title.utf8.prefix(20))
-        let bodyData = Array(body.utf8.prefix(40))
-        var packet1: [UInt8] = [0xAB, 0x00, 0x00, 0xFF, 0x72, appId, 0x00, 0x01]
-        packet1.append(contentsOf: titleData); packet1.append(0x00)
-        packet1.append(contentsOf: bodyData); packet1.append(0x00)
-        packet1[2] = UInt8(packet1.count - 4)
-        writeToWatch(bytes: packet1)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            var packet2: [UInt8] = [0xCD, 0x00, 0x00, appId, 0x01]
-            packet2.append(contentsOf: titleData); packet2.append(0x00)
-            packet2.append(contentsOf: bodyData); packet2.append(0x00)
-            packet2[2] = UInt8(min(packet2.count - 3, 255))
-            self.writeToWatch(bytes: packet2)
-        }
-    }
-    
-    func appIDForApp(_ appName: String) -> UInt8 {
-        let appLower = appName.lowercased()
-        switch true {
-        case appLower.contains("whatsapp"): return 0x03
-        case appLower.contains("discord"):  return 0x06
-        case appLower.contains("message"):  return 0x01
-        case appLower.contains("mail"):     return 0x02
-        case appLower.contains("phone"):    return 0x04
-        case appLower.contains("telegram"): return 0x07
-        case appLower.contains("instagram"):return 0x08
-        case appLower.contains("twitter") || appLower.contains("x.com"): return 0x09
-        default: return 0x0F
-        }
-    }
-    
-    func sendTestNotification(appName: String) {
-        sendNotificationToWatch(appName: appName, title: "Test \(appName)", body: "Notification de test depuis IQNotify")
     }
 }
