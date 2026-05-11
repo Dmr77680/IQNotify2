@@ -1,0 +1,35 @@
+name: Build IQNotify IPA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Build IPA
+        run: |
+          xcodebuild -project IQNotify.xcodeproj \
+            -scheme IQNotify \
+            -configuration Release \
+            -archivePath build/IQNotify.xcarchive \
+            archive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+          
+          mkdir -p build/IQNotify.xcarchive/Products/Applications
+          cd build
+          mkdir Payload
+          cp -r IQNotify.xcarchive/Products/Applications/IQNotify.app Payload/
+          zip -r IQNotify.ipa Payload
+      
+      - name: Upload IPA
+        uses: actions/upload-artifact@v3
+        with:
+          name: IQNotify-IPA
+          path: build/IQNotify.ipa
