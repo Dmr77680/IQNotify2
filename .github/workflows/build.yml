@@ -1,35 +1,498 @@
-name: Build IQNotify IPA
 
+Claude a terminé la réponse.
+Vous avez dit : Salut je veux créer une application sur IOS pour géré les notifications de ma montre Iqibla j'ai tout les fichier je peux te les envoyer pour qu'on termine ens…
+Salut je veux créer une application sur IOS pour géré les notifications de ma montre Iqibla j'ai tout les fichier je peux te les envoyer pour qu'on termine ensemble les etapes
+
+11 mai
+Claude a répondu : Salut !
+Salut ! Oui, bien sûr, envoie-moi tes fichiers et décris-moi où tu en es dans le développement. Je pourrai t'aider à avancer sur l'application iOS.
+
+
+1778507911058_Info.plist
+plist
+
+
+1778507911058_BLEManager.swift
+308 lignes
+
+swift
+
+
+1778507911058_ContentView.swift
+94 lignes
+
+swift
+
+
+1778507911059_IQNotifyApp.swift
+20 lignes
+
+swift
+
+
+1778507911059_NotificationInterceptor.swift
+81 lignes
+
+swift
+
+
+1778507911059_README.md
+60 lignes
+
+md
+
+11 mai
+Claude a répondu : Parfait, j'ai bien lu tous tes fichiers !
+Parfait, j'ai bien lu tous tes fichiers ! Le projet est bien structuré. Voici un résumé de où tu en es et ce qu'il reste à faire :
+
+Ce qui est déjà là ✅
+
+BLEManager.swift — connexion BLE, scan, handshake, envoi de notifications
+ContentView.swift — UI de base
+NotificationInterceptor.swift — interception des notifs en foreground
+IQNotifyApp.swift — point d'entrée
+Info.plist — permissions
+Les limitations actuelles ⚠️
+
+Interception en background impossible via UNUserNotificationCenterDelegate seul — iOS ne permet pas à une app tierce de lire les notifications des autres apps (c'est une sandbox stricte d'Apple)
+Le protocole BLE de la montre n'est pas confirmé — les formats de paquets sont des tentatives basées sur des montres similaires
+Pas de reconnexion robuste ni de gestion d'état en background
+Avant qu'on avance sur le code, j'ai besoin de comprendre ton setup :
+
+Dis-moi tout ça et on attaque les étapes dans le bon ordre !
+
+Vous avez dit : j'ai deja installé side store sur mon iphone
+j'ai deja installé side store sur mon iphone
+
+11 mai
+Claude a répondu : Super !
+Super ! Avec SideStore tu peux installer des IPA signées avec ton Apple ID gratuit. Mais avant de compiler, j'ai encore besoin de savoir :
+
+Vous avez dit : on fais sans
+on fais sans
+
+11 mai
+Claude a répondu : Pas de problème, on fonce !
+Pas de problème, on fonce ! Voici le plan qu'on va suivre :
+
+Étape 1 — Préparer le projet Xcode (aujourd'hui) Étape 2 — Tester la connexion BLE (vérifier que la montre répond) Étape 3 — Affiner le protocole BLE selon ce que la montre renvoie Étape 4 — Notifications (ce qui est possible sans jailbreak)
+
+Commençons par l'étape 1. Pour que le projet compile proprement dans Xcode, il faut :
+
+Créer le projet Xcode — vas dans Xcode → New Project → App → nomme-le IQNotify → interface SwiftUI → language Swift
+Remplacer les fichiers générés par les tiens (glisse-dépose dans le navigateur Xcode)
+Régler le problème principal : IQNotifyApp.swift crée un BLEManager mais ContentView en crée un autre — ils ne partagent pas le même état. Il faut corriger ça.
+Configurer les capabilities dans Xcode :
+Signing & Capabilities → ton Apple ID
+Ajouter Background Modes → cocher Uses Bluetooth LE accessories + Background fetch
+Vérifier Info.plist — les clés Bluetooth doivent être présentes
+Je te prépare les fichiers corrigés maintenant. La correction principale concerne IQNotifyApp.swift qui doit passer le bleManager à ContentView via environmentObject :
+
+
+Lire le skill frontend pour référence
+Lire le skill frontend pour référence
+Bien, le Info.plist est correct. Je corrige maintenant les deux fichiers Swift qui ont des problèmes :
+
+
+2 fichiers créés, lu un fichier
+2 fichiers créés, lu un fichier
+Voilà les deux fichiers corrigés. Ce qui a changé :
+
+IQNotifyApp.swift — le BLEManager est créé ici une seule fois et passé via .environmentObject()
+
+ContentView.swift — utilise @EnvironmentObject au lieu de @StateObject (plus de double instance), + quelques améliorations UI : spinner pendant le scan, boutons de test rapide WhatsApp/Discord/Messages qui s'affichent quand la montre est connectée, bouton "Effacer" le journal, scroll auto vers le bas.
+
+Les fichiers BLEManager.swift et NotificationInterceptor.swift restent identiques, pas besoin de les modifier.
+
+Étapes dans Xcode :
+
+File → New → Project → App → nom IQNotify, Bundle ID com.iqnotify.app, SwiftUI
+Remplace ContentView.swift et IQNotifyApp.swift par ces deux fichiers
+Ajoute BLEManager.swift et
+
+Iqnotifyapp
+Code · SWIFT 
+
+Contentview
+Code · SWIFT 
+La réponse de Claude a été interrompue.
+Vous avez dit : j'ai installer wiresharks sur mon pc et j'ai ouvert le fichier btsnoop_hci.
+j'ai installer wiresharks sur mon pc et j'ai ouvert le fichier btsnoop_hci.log , aide moi a le lire pour connaitre le protocole d'iqibla
+
+16:05
+Claude a répondu : Super initiative !
+Super initiative ! WireShark + HCI log c'est exactement ce qu'il faut pour décoder le protocole. Envoie-moi le fichier btsnoop_hci.log et je t'aide à l'analyser.
+
+En attendant, voici comment filtrer dans Wireshark pour ne voir que le trafic de ta montre :
+
+Filtres utiles à taper dans la barre de filtre Wireshark :
+
+# Voir uniquement le trafic ATT (Bluetooth Low Energy - protocole de la montre)
+btatt
+
+# Voir les écritures vers la montre (Write Commands)
+btatt.opcode == 0x52
+
+# Voir les notifications reçues de la montre
+btatt.opcode == 0x1b
+
+# Voir les deux à la fois
+btatt.opcode == 0x52 || btatt.opcode == 0x1b
+Ce qu'on cherche précisément :
+
+Les paquets envoyés par l'app Iqibla officielle vers la montre quand une notification arrive
+La structure exacte des bytes (header, app ID, texte...)
+La réponse de la montre pour confirmer la réception
+Pour capturer proprement :
+
+Sur Android, active le HCI Snoop Log (Paramètres → Options développeur → Activer le journal HCI Bluetooth)
+Ouvre l'app Iqibla officielle et connecte la montre
+Envoie-toi un message WhatsApp
+Récupère le fichier log (/data/misc/bluetooth/logs/btsnoop_hci.log)
+Envoie-moi le fichier et on décode ensemble les vrais paquets !
+
+
+1778681150438_btsnoop_hci.log
+log
+
+16:05
+Claude a répondu : Parfait, je lis le fichier !
+Parfait, je lis le fichier !
+
+
+Lire le skill file-reading
+Lire le skill file-reading
+C'est un fichier binaire .log, je vais l'analyser avec Python pour extraire les paquets BLE.
+
+
+Exécuté 5 commandes
+Exécuté 5 commandes
+Excellent ! Maintenant je vois clairement le trafic. Je repère des commandes AT et des paquets intéressants. Analysons ça en profondeur :
+
+
+Exécuté 2 commandes
+Exécuté 2 commandes
+
+Chercher les patterns ACKBAOS et les paquets Write vers la montre
+
+Script
+
+Décoder la structure ATT complète des paquets iqibla
+
+Script
+Terminé
+Jackpot ! J'ai tout ce qu'il faut. Voici l'analyse complète :
+
+
+Décoder la structure complète du protocole iqibla avec les commandes de notification
+Décoder la structure complète du protocole iqibla avec les commandes de notification
+
+Décoder la structure complète du protocole iqibla avec les commandes de notification
+
+Script
+Terminé
+Vous avez dit : reprenons
+reprenons
+
+21:01
+Claude a répondu : Bien sûr !
+Bien sûr ! Pour reprendre efficacement, dis-moi où tu veux qu'on continue :
+
+Vous avez dit : Q : Qu'est-ce qu'on fait en priorité ?
+Q : Qu'est-ce qu'on fait en priorité ?
+R : Analyser les paquets de notification WhatsApp trouvés dans le log
+
+21:02
+Claude a répondu : Parfait !
+Parfait ! J'ai déjà repéré les paquets clés. On va les disséquer précisément.
+
+
+Exécuté 3 commandes
+Exécuté 3 commandes
+Excellent ! On a tout décodé. Voici ce qu'on a trouvé :
+
+Le protocole réel de la montre iqibla QW01s :
+
+La montre n'utilise pas le format AB 00 ... FF 72 qu'on avait supposé. Elle utilise un protocole custom avec du MessagePack en payload. Voici la vraie structure confirmée par le log :
+
+ATT WRITE_CMD → handle 0x0082 (AE01)
+│
+├── [seq_lo] [seq_hi]          → compteur de séquence
+├── [0x21]                     → direction HOST→MONTRE
+├── [CMD]                      → 0x36 = notif titre seul
+│                                0x46 = notif titre + corps
+├── [inner_len 4 bytes LE]     → taille du payload
+└── Payload MessagePack :
+    ├── 0xCD 0x27 0x10         → uint16 = 10000 (ID fixe iqibla)
+    ├── 0xCE [4 bytes]         → uint32 paramètre interne
+    ├── 0x00                   → flag
+    ├── 0xCE 0x6A 0x04 0x80 0x34  → uint32 ID app/contexte (fixe)
+    ├── 0x00                   → séparateur
+    ├── 0xA? + "Papa"          → fixstr TITRE
+    ├── 0xB? + "6 nouveaux…"   → fixstr CORPS
+    ├── 0x01                   → flag non-lu
+    └── 0xAC + "com.whatsapp"  → fixstr bundle ID
+Prochaine étape : réécrire BLEManager.swift avec ce vrai protocole pour que les notifications s'affichent vraiment sur la montre. On attaque ?
+
+Vous avez dit : c'est la seul modification a faire ?
+c'est la seul modification a faire ? oui
+
+21:04
+Claude a répondu : Non, il y a d'autres corrections importantes à faire en même temps.
+Non, il y a d'autres corrections importantes à faire en même temps. Voici tout ce qu'on va corriger dans BLEManager.swift :
+
+Le format du paquet — remplacer les faux AB 00 FF 72... par le vrai protocole MessagePack
+Le handle ATT — écrire sur 0x0082 au lieu de chercher par UUID
+Le compteur de séquence — il faut l'incrémenter à chaque paquet
+Le handshake — remplacer les fausses commandes par le vrai ACKBAOS
+On fait tout en une fois :
+
+
+Fichier créé, lu un fichier
+Fichier créé, lu un fichier
+Voilà ! Voici ce qui a changé par rapport à l'ancien fichier :
+
+Protocole corrigé ✅
+
+Vrai format MessagePack avec 0xCD 0x27 0x10 + timestamp + contexte 0x6A048034
+CMD 0x36 pour notif titre seul, CMD 0x46 pour titre + corps
+Bundle IDs réels (com.whatsapp au lieu d'un app ID numérique)
+Handshake corrigé ✅
+
+Vrai paquet ACKBAOS! au lieu des fausses commandes AB 00 FF
+Détection de la réponse ACKBAOS de la montre dans les logs
+Séquence corrigée ✅
+
+Compteur seqCounter qui s'incrémente à chaque paquet comme l'app officielle
+Ce qu'il reste à faire :
+
+Remplacer BLEManager.swift dans Xcode par ce fichier
+Compiler et installer via SideStore
+Tester : connecter la montre → appuyer sur "WhatsApp" → vérifier si la notif s'affiche
+
+Blemanager
+Code · SWIFT 
+
+Run xcodebuild -project IQNotify.xcodeproj \ Command line invocation: /Applications/Xcode_16.4.app/Contents/Developer/usr/bin/xcodebuild -project IQNotify.xcodeproj -scheme IQNotify -configuration Debug -archivePath build/IQNotify.xcarchive archive CODE_SIGN_IDENTITY= CODE_SIGNING_REQUIRED=NO
+
+pasted
+
+21:09
+Claude a répondu : L'erreur vient de ContentView.
+L'erreur vient de ContentView.swift — le compilateur Swift n'arrive pas à inférer les types dans le body parce qu'il est trop complexe. Je corrige ça en découpant la vue en sous-composants :
+
+
+2 fichiers créés, a exécuté une commande, lu un fichier
+2 fichiers créés, a exécuté une commande, lu un fichier
+L'erreur était the compiler is unable to type-check this expression in reasonable time — c'est un problème classique Swift quand le body est trop long d'un seul bloc. La solution : découper en structs séparés.
+
+Ce qui a changé dans ContentView.swift :
+
+StatusCard — la carte de statut montre
+ConnectButton — bouton connexion/déconnexion
+NotificationButton — bouton permissions
+TestButtons — les boutons WhatsApp/Discord/Messages
+LogView — le journal
+Remplace ces deux fichiers dans Xcode et relance le build. Les autres fichiers (IQNotifyApp.swift, NotificationInterceptor.swift, Info.plist) restent identiques.
+
+
+Contentview
+Code · SWIFT 
+
+Blemanager
+Code · SWIFT 
+Vous avez dit : l'application se referme directement
+l'application se referme directement
+
+21:16
+Claude a répondu : C'est un crash au démarrage.
+C'est un crash au démarrage. La cause la plus probable est que ContentView utilise @EnvironmentObject mais que l'objet n'est pas injecté correctement, ou un crash dans BLEManager.init().
+
+Envoie-moi le crash log pour confirmer — dans Xcode :
+
+Xcode → Window → Devices and Simulators → ton iPhone → View Device Logs
+
+Ou dis-moi : est-ce que tu vois quelque chose dans la console Xcode quand l'app crash ?
+
+En attendant, voici le fix préventif le plus probable — IQNotifyApp.swift doit absolument passer le bleManager via environmentObject :
+
+
+Vérifier IQNotifyApp.swift dans les outputs
+Vérifier IQNotifyApp.swift dans les outputs
+IQNotifyApp.swift est correct. Le crash vient probablement d'Info.plist — sur iOS, si les clés de permission Bluetooth sont absentes ou mal formatées, l'app crash immédiatement au lancement. Vérifions :
+
+
+Lire le Info.plist uploadé
+Lire le Info.plist uploadé
+Le problème est là — les commentaires XML (<!-- ... -->) ne sont pas valides dans un .plist iOS. Xcode peut les accepter mais une fois dans l'IPA installée via SideStore, ça fait crasher l'app au démarrage. Je corrige :
+
+
+Fichier créé, lu un fichier
+Fichier créé, lu un fichier
+Remplace le Info.plist dans Xcode par celui-ci, recompile et réinstalle via SideStore. Les commentaires XML <!-- --> dans un plist sont la cause classique de crash immédiat sur iOS quand l'app est installée en dehors de l'App Store.
+
+
+Info
+PLIST 
+Vous avez dit : je ne passe par xcode je suis sur sidestore sur ios
+je ne passe par xcode je suis sur sidestore sur ios
+
+21:17
+Claude a répondu : Ah d'accord, tu utilises un workflow de build automatisé (GitHub Actions apparemment vu les logs).
+Ah d'accord, tu utilises un workflow de build automatisé (GitHub Actions apparemment vu les logs). Donc tu n'as pas Xcode sur ton Mac, tout se compile en ligne ?
+
+Dis-moi comment ton projet est organisé :
+
+Vous avez dit : Q : Comment tu compiles le projet ?
+Q : Comment tu compiles le projet ?
+R : GitHub Actions (workflow .yml)
+
+Q : Comment tu mets à jour les fichiers Swift ?
+R : Je les modifie directement sur GitHub
+
+21:18
+Claude a répondu : Parfait, je comprends le setup.
+Parfait, je comprends le setup. Envoie-moi ton fichier .yml GitHub Actions pour que je voie comment le build est configuré, et je t'aide à corriger le workflow + les fichiers en même temps.
+
+Tu le trouves dans ton repo sous .github/workflows/ — copie-colle son contenu ici ou envoie le fichier.
+
+Vous avez dit : name: Build IQNotify IPA
+name: Build IQNotify IPA
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-      
-      - name: Build IPA
+
+name: Build IPA
+run: |
+  xcodebuild -project IQNotify.xcodeproj \
+    -scheme IQNotify \
+    -configuration Debug \
+    -archivePath build/IQNotify.xcarchive \
+    archive \
+    CODE_SIGN_IDENTITY="" \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGN_ENTITLEMENTS=IQNotify/IQNotify.entitlements
+
+  mkdir -p build/Payload
+  cp -r build/IQNotify.xcarchive/Products/Applications/IQNotify.app build/Payload/
+  cd build
+  zip -r IQNotify.ipa Payload
+
+name: Upload IPA
+uses: actions/upload-artifact@v4
+with:
+  name: IQNotify-IPA
+  path: build/IQNotify.ipa
+
+Afficher plus
+21:19
+Claude a répondu : Le workflow est bon mais il manque un fichier .
+Le workflow est bon mais il manque un fichier .entitlements qui est référencé dans la commande. C'est probablement ce qui cause aussi le crash. Je te donne tout ce qu'il faut mettre à jour dans ton repo GitHub :
+
+
+2 fichiers créés, lu un fichier
+2 fichiers créés, lu un fichier
+Voici exactement ce que tu dois faire sur GitHub :
+
+1. Mettre à jour ces fichiers dans ton repo :
+
+Fichier	Où le mettre
+build.yml	.github/workflows/build.yml
+IQNotify.entitlements	IQNotify/IQNotify.entitlements
+Info.plist	IQNotify/Info.plist
+ContentView.swift	IQNotify/ContentView.swift
+BLEManager.swift	IQNotify/BLEManager.swift
+2. IQNotifyApp.swift — celui qu'on avait corrigé la dernière fois, vérifie qu'il est bien à jour dans IQNotify/IQNotifyApp.swift
+
+3. Une fois tout pushé, GitHub Actions va compiler automatiquement → tu télécharges l'IPA dans l'onglet Actions → Artifacts → tu l'installes via SideStore.
+
+
+Build
+YML 
+
+Iqnotify
+ENTITLEMENTS 
+
+Info
+PLIST 
+
+Contentview
+Code · SWIFT 
+
+Blemanager
+Code · SWIFT 
+
+
+
+
+Claude est une IA et peut faire des erreurs. Veuillez vérifier les réponses.
+Build · YML
+Copier
+
+name: Build IQNotify IPA
+ 
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+ 
+jobs:
+  build:
+    runs-on: macos-latest
+ 
+    steps:
+      - uses: actions/checkout@v3
+ 
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+ 
+      - name: Build Archive
         run: |
-          xcodebuild -project IQNotify.xcodeproj \
+          xcodebuild \
+            -project IQNotify.xcodeproj \
             -scheme IQNotify \
             -configuration Debug \
+            -destination "generic/platform=iOS" \
             -archivePath build/IQNotify.xcarchive \
             archive \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_ENTITLEMENTS=IQNotify/IQNotify.entitlements
-          
+            CODE_SIGN_ENTITLEMENTS=IQNotify/IQNotify.entitlements \
+            ONLY_ACTIVE_ARCH=NO
+ 
+      - name: Package IPA
+        run: |
           mkdir -p build/Payload
-          cp -r build/IQNotify.xcarchive/Products/Applications/IQNotify.app build/Payload/
+          cp -r "build/IQNotify.xcarchive/Products/Applications/IQNotify.app" build/Payload/
           cd build
-          zip -r IQNotify.ipa Payload
-      
+          zip -r IQNotify.ipa Payload/
+ 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: IQNotify-IPA
           path: build/IQNotify.ipa
+          retention-days: 30
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
