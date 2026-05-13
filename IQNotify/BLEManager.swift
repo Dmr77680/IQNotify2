@@ -1,117 +1,43 @@
 import Foundation
 import CoreBluetooth
 import UserNotifications
-import SwiftUI
 
-// UUIDs de la montre iqibla QW01s-5C4F
-let SERVICE_AE30 = CBUUID(string: "AE30")
-let CHAR_AE01_WRITE = CBUUID(string: "AE01")
-let CHAR_AE02_NOTIFY = CBUUID(string: "AE02")
-let CHAR_AE03_WRITE = CBUUID(string: "AE03")
-let CHAR_AE04_NOTIFY = CBUUID(string: "AE04")
-let CHAR_AE05_INDICATE = CBUUID(string: "AE05")
-let CHAR_AE10_RW = CBUUID(string: "AE10")
-let SERVICE_AE3A = CBUUID(string: "AE3A")
-let CHAR_AE3B_WRITE = CBUUID(string: "AE3B")
-let CHAR_AE3C_NOTIFY = CBUUID(string: "AE3C")
+// MARK: - UUIDs réels de la montre iqibla QW01s-5C4F (confirmés par HCI log)
+let SERVICE_AE30        = CBUUID(string: "AE30")
+let CHAR_AE01_WRITE     = CBUUID(string: "AE01")  // handle ATT 0x0082 — Write Without Response
+let CHAR_AE02_NOTIFY    = CBUUID(string: "AE02")  // handle ATT 0x0084 — Notify
+
 let WATCH_NAME = "QW01s"
 
-struct BLEProtocol {
-    let name: String
-    let description: String
-    let color: Color
-    let buildPacket: (String, String, String, UInt8) -> [UInt8]
-}
+// MARK: - Constantes protocole iqibla (décodées depuis btsnoop_hci.log)
+private let IQIBLA_CMD_ID: UInt16   = 0x2710          // ID fixe de toutes les commandes
+private let IQIBLA_APP_CTX: UInt32  = 0x6A048034      // Contexte applicatif fixe
+private let IQIBLA_DIR_SEND: UInt8  = 0x21            // Direction HOST → MONTRE
+private let IQIBLA_CMD_NOTIF_TITLE: UInt8  = 0x36     // Notification titre seul
+private let IQIBLA_CMD_NOTIF_FULL:  UInt8  = 0x46     // Notification titre + corps
 
 class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
-    
-    @Published var isConnected = false
-    @Published var isScanning = false
+
+    @Published var isConnected      = false
+    @Published var isScanning       = false
     @Published var notificationsEnabled = false
-    @Published var logs: [String] = []
-    
-    private var centralManager: CBCentralManager!
-    private var watchPeripheral: CBPeripheral?
-    private var writeCharacteristic: CBCharacteristic?
-    private var write2Characteristic: CBCharacteristic?
-    
-    // MARK: - Tous les protocoles connus
-    lazy var protocols: [BLEProtocol] = [
-        BLEProtocol(name: "Da Fit / Zeblaze", description: "AB 00 [len] FF 72 [appId] 01 [title] 00 [body]", color: .blue) { title, body, app, appId in
-            var p: [UInt8] = [0xAB, 0x00, 0x00, 0xFF, 0x72, appId, 0x01]
-            p += Array(title.utf8.prefix(20)); p.append(0x00)
-            p += Array(body.utf8.prefix(40)); p.append(0x00)
-            p[2] = UInt8(min(p.count - 4, 255)); return p
-        },
-        BLEProtocol(name: "Colmi / iQOO", description: "CD 00 [len] [appId] 01 [title] 00 [body]", color: .purple) { title, body, app, appId in
-            var p: [UInt8] = [0xCD, 0x00, 0x00, appId, 0x01]
-            p += Array(title.utf8.prefix(20)); p.append(0x00)
-            p += Array(body.utf8.prefix(40)); p.append(0x00)
-            p[2] = UInt8(min(p.count - 3, 255)); return p
-        },
-        BLEProtocol(name: "H Band / Haylou", description: "02 [appId] [len] [title+body UTF8]", color: .orange) { title, body, app, appId in
-            let text = "\(title): \(body)"
-            var p: [UInt8] = [0x02, appId]
-            let textBytes = Array(text.utf8.prefix(60))
-            p.append(UInt8(textBytes.count))
-            p += textBytes; return p
-        },
-        BLEProtocol(name: "Amazfit / Huami", description: "07 [appId] 00 01 [title] 00 [body] 00", color: .green) { title, body, app, appId in
-            var p: [UInt8] = [0x07, appId, 0x00, 0x01]
-            p += Array(title.utf8.prefix(20)); p.append(0x00)
-            p += Array(body.utf8.prefix(40)); p.append(0x00)
-            return p
-        },
-        BLEProtocol(name: "Fitpolo / Bozlun", description: "23 [appId] [len] [body]", color: .red) { title, body, app, appId in
-            let textBytes = Array(body.utf8.prefix(50))
-            var p: [UInt8] = [0x23, appId, UInt8(textBytes.count)]
-            p += textBytes; return p
-        },
-        BLEProtocol(name: "Lenovo / Fossil", description: "FE 00 [appId] 00 [title] 00 [body]", color: .pink) { title, body, app, appId in
-            var p: [UInt8] = [0xFE, 0x00, appId, 0x00]
-            p += Array(title.utf8.prefix(20)); p.append(0x00)
-            p += Array(body.utf8.prefix(40)); p.append(0x00)
-            return p
-        },
-        BLEProtocol(name: "Jieli (JL) chipset", description: "0A 01 [appId] [len16] [title] [body]", color: .teal) { title, body, app, appId in
-            let text = "\(title)\0\(body)"
-            let textBytes = Array(text.utf8.prefix(60))
-            let len = UInt16(textBytes.count)
-            var p: [UInt8] = [0x0A, 0x01, appId, UInt8(len >> 8), UInt8(len & 0xFF)]
-            p += textBytes; return p
-        },
-        BLEProtocol(name: "Realtek RTL8762", description: "55 AA [appId] 01 00 [len] [title] [body]", color: .indigo) { title, body, app, appId in
-            let titleBytes = Array(title.utf8.prefix(20))
-            let bodyBytes = Array(body.utf8.prefix(40))
-            let len = titleBytes.count + bodyBytes.count + 2
-            var p: [UInt8] = [0x55, 0xAA, appId, 0x01, 0x00, UInt8(min(len, 255))]
-            p += titleBytes; p.append(0x00)
-            p += bodyBytes; p.append(0x00)
-            return p
-        },
-        BLEProtocol(name: "Nordic NRF52 ANCS-like", description: "01 [notifUID x4] 00 [appId] [title] [body]", color: .cyan) { title, body, app, appId in
-            var p: [UInt8] = [0x01, 0x00, 0x00, 0x00, 0x01, 0x00, appId]
-            p += Array(title.utf8.prefix(20)); p.append(0x00)
-            p += Array(body.utf8.prefix(40)); p.append(0x00)
-            return p
-        },
-        BLEProtocol(name: "Generic QW / iQibla", description: "AE 01 [appId] [len] [title] 00 [body] 00", color: .brown) { title, body, app, appId in
-            let titleBytes = Array(title.utf8.prefix(20))
-            let bodyBytes = Array(body.utf8.prefix(40))
-            let len = titleBytes.count + bodyBytes.count + 2
-            var p: [UInt8] = [0xAE, 0x01, appId, UInt8(min(len, 255))]
-            p += titleBytes; p.append(0x00)
-            p += bodyBytes; p.append(0x00)
-            return p
-        }
-    ]
-    
+    @Published var logs: [String]   = []
+
+    private var centralManager:      CBCentralManager!
+    private var watchPeripheral:     CBPeripheral?
+    private var writeCharacteristic: CBCharacteristic?   // AE01 handle 0x0082
+    private var notifyCharacteristic: CBCharacteristic?  // AE02 handle 0x0084
+
+    // Compteur de séquence — incrémenté à chaque paquet envoyé
+    private var seqCounter: UInt16 = 0x6A47
+
     override init() {
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
         setupNotificationObserver()
     }
-    
+
+    // MARK: - Logging
     func addLog(_ message: String) {
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
         DispatchQueue.main.async {
@@ -119,161 +45,329 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             if self.logs.count > 100 { self.logs.removeFirst() }
         }
     }
-    
+
+    // MARK: - Permission notifications
     func requestNotificationPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
             DispatchQueue.main.async {
                 self.notificationsEnabled = granted
-                self.addLog(granted ? "✅ Notifications autorisées" : "❌ Notifications refusées")
+                self.addLog(granted ? "✅ Notifications accordées" : "❌ Notifications refusées")
             }
         }
     }
-    
+
+    // MARK: - Observer notifications système
     func setupNotificationObserver() {
-        NotificationCenter.default.addObserver(self, selector: #selector(handleAppNotification(_:)),
-                                               name: NSNotification.Name("NewNotificationReceived"), object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppNotification(_:)),
+            name: NSNotification.Name("NewNotificationReceived"),
+            object: nil
+        )
     }
-    
+
     @objc func handleAppNotification(_ notification: Foundation.Notification) {
-        guard let userInfo = notification.userInfo,
-              let appName = userInfo["appName"] as? String,
-              let title = userInfo["title"] as? String,
-              let body = userInfo["body"] as? String else { return }
+        guard let userInfo  = notification.userInfo,
+              let appName   = userInfo["appName"] as? String,
+              let title     = userInfo["title"]   as? String,
+              let body      = userInfo["body"]    as? String else { return }
         sendNotificationToWatch(appName: appName, title: title, body: body)
     }
-    
+
+    // MARK: - BLE Scanning
     func startScanning() {
-        guard centralManager.state == .poweredOn else { addLog("⚠️ Bluetooth non disponible"); return }
+        guard centralManager.state == .poweredOn else {
+            addLog("⚠️ Bluetooth non disponible")
+            return
+        }
         addLog("🔍 Recherche de QW01s...")
         DispatchQueue.main.async { self.isScanning = true }
-        centralManager.scanForPeripherals(withServices: nil, options: nil)
+        centralManager.scanForPeripherals(withServices: nil,
+                                          options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
             if !self.isConnected {
                 self.centralManager.stopScan()
                 DispatchQueue.main.async { self.isScanning = false }
-                self.addLog("⏱ Scan terminé")
+                self.addLog("⏱ Scan terminé — montre non trouvée")
             }
         }
     }
-    
+
     func disconnect() {
         if let p = watchPeripheral { centralManager.cancelPeripheralConnection(p) }
     }
-    
+
+    // MARK: - CBCentralManagerDelegate
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        if central.state == .poweredOn { addLog("✅ Bluetooth prêt") }
+        switch central.state {
+        case .poweredOn:  addLog("✅ Bluetooth activé")
+        case .poweredOff: addLog("❌ Bluetooth désactivé")
+        default: break
+        }
     }
-    
-    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
-                        advertisementData: [String: Any], rssi RSSI: NSNumber) {
+
+    func centralManager(_ central: CBCentralManager,
+                        didDiscover peripheral: CBPeripheral,
+                        advertisementData: [String: Any],
+                        rssi RSSI: NSNumber) {
         guard let name = peripheral.name, name.contains(WATCH_NAME) else { return }
-        addLog("📡 Montre trouvée: \(name)")
+        addLog("📡 Montre trouvée : \(name)")
         centralManager.stopScan()
         DispatchQueue.main.async { self.isScanning = false }
         watchPeripheral = peripheral
         peripheral.delegate = self
         centralManager.connect(peripheral, options: nil)
     }
-    
+
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        addLog("✅ Connecté!")
+        addLog("✅ Connecté à \(peripheral.name ?? "QW01s")")
         DispatchQueue.main.async { self.isConnected = true }
-        peripheral.discoverServices([SERVICE_AE30, SERVICE_AE3A])
+        peripheral.discoverServices([SERVICE_AE30])
+
+        // Handshake ACKBAOS après 1 seconde (confirmé dans le log)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.sendHandshake()
+        }
     }
-    
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+
+    func centralManager(_ central: CBCentralManager,
+                        didDisconnectPeripheral peripheral: CBPeripheral,
+                        error: Error?) {
         addLog("🔌 Déconnecté")
-        DispatchQueue.main.async { self.isConnected = false; self.writeCharacteristic = nil }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.startScanning() }
+        DispatchQueue.main.async {
+            self.isConnected = false
+            self.writeCharacteristic  = nil
+            self.notifyCharacteristic = nil
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            self.addLog("🔄 Reconnexion...")
+            self.startScanning()
+        }
     }
-    
-    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        addLog("❌ Echec connexion")
+
+    func centralManager(_ central: CBCentralManager,
+                        didFailToConnect peripheral: CBPeripheral,
+                        error: Error?) {
+        addLog("❌ Échec connexion : \(error?.localizedDescription ?? "inconnu")")
         DispatchQueue.main.async { self.isConnected = false }
     }
-    
+
+    // MARK: - CBPeripheralDelegate
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        peripheral.services?.forEach { peripheral.discoverCharacteristics(nil, for: $0) }
+        guard let services = peripheral.services else { return }
+        for service in services {
+            addLog("🔧 Service : \(service.uuid)")
+            peripheral.discoverCharacteristics(nil, for: service)
+        }
     }
-    
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        service.characteristics?.forEach { char in
+
+    func peripheral(_ peripheral: CBPeripheral,
+                    didDiscoverCharacteristicsFor service: CBService,
+                    error: Error?) {
+        guard let chars = service.characteristics else { return }
+        for char in chars {
             switch char.uuid {
             case CHAR_AE01_WRITE:
                 writeCharacteristic = char
-                addLog("✅ AE01 Write prêt")
-            case CHAR_AE3B_WRITE:
-                write2Characteristic = char
-                addLog("✅ AE3B Write prêt")
-            case CHAR_AE02_NOTIFY, CHAR_AE04_NOTIFY, CHAR_AE05_INDICATE, CHAR_AE3C_NOTIFY:
+                addLog("   ✅ AE01 (écriture) prêt — handle 0x0082")
+            case CHAR_AE02_NOTIFY:
+                notifyCharacteristic = char
                 peripheral.setNotifyValue(true, for: char)
-                addLog("✅ \(char.uuid) Notify activé")
-            default: break
+                addLog("   ✅ AE02 (notifications) activé — handle 0x0084")
+            default:
+                // Activer les notifications sur toutes les autres caractéristiques notify/indicate
+                if char.properties.contains(.notify) || char.properties.contains(.indicate) {
+                    peripheral.setNotifyValue(true, for: char)
+                }
             }
         }
     }
-    
-    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+
+    func peripheral(_ peripheral: CBPeripheral,
+                    didUpdateValueFor characteristic: CBCharacteristic,
+                    error: Error?) {
         guard let data = characteristic.value else { return }
         let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
         addLog("📥 \(characteristic.uuid): \(hex)")
-    }
-    
-    func writeToWatch(bytes: [UInt8], useSecondary: Bool = false) {
-        guard let peripheral = watchPeripheral else { addLog("⚠️ Non connecté"); return }
-        let char = useSecondary ? write2Characteristic : writeCharacteristic
-        guard let char = char else { addLog("⚠️ Caractéristique non disponible"); return }
-        let data = Data(bytes)
-        let hex = bytes.map { String(format: "%02X", $0) }.joined(separator: " ")
-        addLog("📤 [\(char.uuid)] \(hex)")
-        peripheral.writeValue(data, for: char, type: .withoutResponse)
-    }
-    
-    // MARK: - Test d'un protocole spécifique
-    func sendProtocolTest(index: Int) {
-        guard index < protocols.count else { return }
-        let p = protocols[index]
-        addLog("🧪 Test Format \(index+1): \(p.name)")
-        let packet = p.buildPacket("Test IQNotify", "Notification Discord test", "Discord", 0x06)
-        writeToWatch(bytes: packet)
-        // Essaie aussi sur AE3B
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.writeToWatch(bytes: packet, useSecondary: true)
-        }
-    }
-    
-    // MARK: - Envoi notification réelle
-    func sendNotificationToWatch(appName: String, title: String, body: String) {
-        guard isConnected else { return }
-        addLog("🔔 [\(appName)] \(title)")
-        let appId = appIDForApp(appName)
-        // Envoie tous les formats en séquence
-        for (i, proto) in protocols.enumerated() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.2) {
-                let packet = proto.buildPacket(title, body, appName, appId)
-                self.writeToWatch(bytes: packet)
+
+        // Détecter les ACK ACKBAOS de la montre (confirmé dans le log)
+        if data.count >= 11 {
+            let payload = Array(data)
+            // Pattern: ... 41 43 4B 42 41 4F 53 ("ACKBAOS")
+            if payload.contains(0x41) {
+                let ascii = data.map { ($0 >= 32 && $0 < 127) ? String(UnicodeScalar($0)) : "." }.joined()
+                if ascii.contains("ACKBAOS") {
+                    addLog("🤝 Handshake ACKBAOS confirmé par la montre ✅")
+                }
             }
         }
     }
-    
-    func sendTestNotification(appName: String) {
-        sendNotificationToWatch(appName: appName, title: appName, body: "Notification test depuis IQNotify")
-    }
-    
-    func appIDForApp(_ appName: String) -> UInt8 {
-        switch appName.lowercased() {
-        case let s where s.contains("whatsapp"):  return 0x03
-        case let s where s.contains("discord"):   return 0x06
-        case let s where s.contains("message"):   return 0x01
-        case let s where s.contains("mail"):      return 0x02
-        case let s where s.contains("phone"):     return 0x04
-        case let s where s.contains("telegram"):  return 0x07
-        case let s where s.contains("instagram"): return 0x08
-        case let s where s.contains("twitter"):   return 0x09
-        case let s where s.contains("snapchat"):  return 0x0A
-        case let s where s.contains("gmail"):     return 0x0B
-        case let s where s.contains("outlook"):   return 0x0C
-        default: return 0x0F
+
+    func peripheral(_ peripheral: CBPeripheral,
+                    didWriteValueFor characteristic: CBCharacteristic,
+                    error: Error?) {
+        if let error = error {
+            addLog("❌ Erreur écriture : \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Compteur de séquence
+    private func nextSeq() -> (lo: UInt8, hi: UInt8) {
+        seqCounter &+= 1
+        return (lo: UInt8(seqCounter & 0xFF), hi: UInt8((seqCounter >> 8) & 0xFF))
+    }
+
+    // MARK: - Écriture BLE bas niveau
+    func writeToWatch(bytes: [UInt8]) {
+        guard let peripheral = watchPeripheral,
+              let char = writeCharacteristic else {
+            addLog("⚠️ Montre non connectée")
+            return
+        }
+        let data = Data(bytes)
+        let hex  = bytes.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
+        addLog("📤 \(hex)\(bytes.count > 16 ? "..." : "")")
+        peripheral.writeValue(data, for: char, type: .withoutResponse)
+    }
+
+    // MARK: - Handshake réel ACKBAOS (confirmé HCI log)
+    // Paquet observé : seq 0x47 dir 0x21 cmd 0x0F "ACKBAOS!x...."
+    func sendHandshake() {
+        let (lo, hi) = nextSeq()
+        // Reproduit exactement le paquet vu dans le log
+        let packet: [UInt8] = [
+            lo, hi, IQIBLA_DIR_SEND,                      // seq + direction
+            0x0F,                                           // CMD handshake
+            0x0F, 0x00, 0x00, 0x00,                        // inner_len = 15
+            0x41, 0x43, 0x4B, 0x42, 0x41, 0x4F, 0x53,    // "ACKBAOS"
+            0x21,                                           // '!'
+            0x78, 0xf6, 0xcc,                              // bytes fixes observés
+            0x00, 0x00, 0x00                               // padding
+        ]
+        writeToWatch(bytes: packet)
+        addLog("🤝 Handshake ACKBAOS envoyé")
+    }
+
+    // MARK: - Construction paquet notification (protocole réel iqibla)
+    //
+    // Structure confirmée par btsnoop_hci.log :
+    // [seq_lo][seq_hi][0x21][CMD][inner_len 4B LE] + payload MessagePack :
+    //   0xCD 0x27 0x10          → uint16 = 10000 (ID iqibla fixe)
+    //   0xCE [uint32]           → paramètre interne (timestamp ms)
+    //   0x00                    → flag
+    //   0xCE 0x6A 0x04 0x80 0x34 → contexte app fixe
+    //   0x00                    → séparateur
+    //   [fixstr] titre          → 0xA0|len + UTF8
+    //   [fixstr] corps          → 0xA0|len + UTF8 (seulement si CMD=0x46)
+    //   0x01                    → flag non-lu
+    //   [fixstr] bundleID       → 0xA0|len + UTF8
+    //   0xCE 0x6A 0x04 0x80 0x34 → contexte app bis
+    //   [4 bytes]               → CRC (on met 0x00 pour l'instant)
+
+    func sendNotificationToWatch(appName: String, title: String, body: String) {
+        guard isConnected else {
+            addLog("⚠️ Montre non connectée — notification ignorée")
+            return
+        }
+        addLog("🔔 [\(appName)] \(title)")
+
+        let titleBytes  = Array(title.utf8.prefix(31))   // fixstr max 31 bytes
+        let bodyBytes   = Array(body.utf8.prefix(31))
+        let bundleBytes = Array(bundleID(for: appName).utf8.prefix(31))
+
+        let hasBody = !body.isEmpty
+        let cmd: UInt8 = hasBody ? IQIBLA_CMD_NOTIF_FULL : IQIBLA_CMD_NOTIF_TITLE
+
+        // Timestamp en ms (uint32) comme paramètre interne
+        let tsMs = UInt32(Date().timeIntervalSince1970 * 1000) & 0x0FFFFFFF
+
+        var payload: [UInt8] = []
+
+        // uint16 ID iqibla : 0xCD 0x27 0x10
+        payload += [0xCD, 0x27, 0x10]
+
+        // uint32 timestamp : 0xCE + big-endian
+        payload += [0xCE,
+                    UInt8((tsMs >> 24) & 0xFF),
+                    UInt8((tsMs >> 16) & 0xFF),
+                    UInt8((tsMs >>  8) & 0xFF),
+                    UInt8( tsMs        & 0xFF)]
+
+        // flag
+        payload += [0x00]
+
+        // uint32 contexte app fixe : 0xCE 0x6A 0x04 0x80 0x34
+        payload += [0xCE, 0x6A, 0x04, 0x80, 0x34]
+
+        // séparateur
+        payload += [0x00]
+
+        // fixstr titre : 0xA0|len + bytes
+        payload += [0xA0 | UInt8(titleBytes.count)] + titleBytes
+
+        // fixstr corps (si CMD 0x46)
+        if hasBody {
+            payload += [0xA0 | UInt8(bodyBytes.count)] + bodyBytes
+        }
+
+        // flag non-lu
+        payload += [0x01]
+
+        // fixstr bundle ID
+        payload += [0xA0 | UInt8(bundleBytes.count)] + bundleBytes
+
+        // contexte app bis
+        payload += [0xCE, 0x6A, 0x04, 0x80, 0x34]
+
+        // CRC placeholder (4 bytes — on met 0x00, la montre semble ne pas le vérifier)
+        payload += [0x00, 0x00, 0x00, 0x00]
+
+        // inner_len = taille du payload (little-endian uint32)
+        let innerLen = UInt32(payload.count)
+
+        // Construire le paquet complet
+        let (lo, hi) = nextSeq()
+        var packet: [UInt8] = [lo, hi, IQIBLA_DIR_SEND, cmd]
+        packet += [
+            UInt8( innerLen        & 0xFF),
+            UInt8((innerLen >>  8) & 0xFF),
+            UInt8((innerLen >> 16) & 0xFF),
+            UInt8((innerLen >> 24) & 0xFF)
+        ]
+        packet += payload
+
+        writeToWatch(bytes: packet)
+    }
+
+    // MARK: - Bundle IDs réels (confirmés dans le log : "com.whatsapp")
+    func bundleID(for appName: String) -> String {
+        let lower = appName.lowercased()
+        switch true {
+        case lower.contains("whatsapp"):  return "com.whatsapp"
+        case lower.contains("discord"):   return "com.hammerandchisel.discord"
+        case lower.contains("message"):   return "com.apple.MobileSMS"
+        case lower.contains("mail"):      return "com.apple.mobilemail"
+        case lower.contains("phone"):     return "com.apple.mobilephone"
+        case lower.contains("telegram"):  return "org.telegram.TelegramSE"
+        case lower.contains("instagram"): return "com.burbn.instagram"
+        case lower.contains("twitter"),
+             lower.contains("x.com"):     return "com.atebits.Tweetie2"
+        case lower.contains("facebook"):  return "com.facebook.Facebook"
+        case lower.contains("gmail"):     return "com.google.Gmail"
+        case lower.contains("outlook"):   return "com.microsoft.Outlook"
+        case lower.contains("snapchat"):  return "com.snapchat.snapchat"
+        case lower.contains("tiktok"):    return "com.zhiliaoapp.musically"
+        case lower.contains("linkedin"):  return "com.linkedin.LinkedIn"
+        default:                          return "com.apple.generic"
+        }
+    }
+
+    // MARK: - Test rapide
+    func sendTestNotification(appName: String) {
+        sendNotificationToWatch(
+            appName: appName,
+            title:   appName,
+            body:    "Message de test depuis IQNotify 👋"
+        )
     }
 }
