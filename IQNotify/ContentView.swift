@@ -1,7 +1,8 @@
 import SwiftUI
 
+// BLEManager est créé ici directement — plus besoin d'EnvironmentObject
 struct ContentView: View {
-    @EnvironmentObject private var bleManager: BLEManager
+    @StateObject private var bleManager = BLEManager()
 
     var body: some View {
         NavigationView {
@@ -26,7 +27,10 @@ struct ContentView: View {
                     if bleManager.isConnected {
                         TestButtons(bleManager: bleManager)
                     }
-                    LogView(logs: bleManager.logs, onClear: { bleManager.logs.removeAll() })
+                    LogView(
+                        logs: bleManager.logs,
+                        onClear: { bleManager.logs.removeAll() }
+                    )
                 }
                 .padding()
             }
@@ -34,6 +38,7 @@ struct ContentView: View {
         }
         .onAppear {
             bleManager.requestNotificationPermission()
+            NotificationInterceptor.shared.setup(bleManager: bleManager)
         }
     }
 }
@@ -42,7 +47,6 @@ struct ContentView: View {
 
 struct StatusCard: View {
     let isConnected: Bool
-
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: isConnected
@@ -50,12 +54,9 @@ struct StatusCard: View {
                   : "applewatch.slash")
                 .font(.system(size: 60))
                 .foregroundColor(isConnected ? .green : .gray)
-                .animation(.easeInOut, value: isConnected)
-
             Text(isConnected ? "Montre connectée" : "Montre déconnectée")
                 .font(.title2)
                 .fontWeight(.semibold)
-
             Text("QW01s-5C4F")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -76,7 +77,6 @@ struct ConnectButton: View {
         if isScanning { return "antenna.radiowaves.left.and.right" }
         return isConnected ? "xmark.circle" : "magnifyingglass"
     }
-
     private var label: String {
         if isScanning { return "Recherche en cours…" }
         return isConnected ? "Déconnecter" : "Connecter la montre"
@@ -106,7 +106,6 @@ struct ConnectButton: View {
 struct NotificationButton: View {
     let enabled: Bool
     let onTap: () -> Void
-
     var body: some View {
         Button(action: onTap) {
             HStack {
@@ -124,7 +123,6 @@ struct NotificationButton: View {
 
 struct TestButtons: View {
     let bleManager: BLEManager
-
     var body: some View {
         VStack(spacing: 10) {
             Text("Test de notification")
@@ -153,7 +151,6 @@ struct TestButtons: View {
 struct LogView: View {
     let logs: [String]
     let onClear: () -> Void
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -165,7 +162,6 @@ struct LogView: View {
                     .foregroundColor(.secondary)
             }
             .padding(.horizontal)
-
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(logs.reversed().enumerated()), id: \.offset) { _, log in
