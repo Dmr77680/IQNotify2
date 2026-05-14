@@ -40,9 +40,15 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     // MARK: - Logging
     func addLog(_ message: String) {
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        DispatchQueue.main.async {
-            self.logs.append("[\(timestamp)] \(message)")
-            if self.logs.count > 100 { self.logs.removeFirst() }
+        let line = "[\(timestamp)] \(message)"
+        if Thread.isMainThread {
+            logs.append(line)
+            if logs.count > 100 { logs.removeFirst() }
+        } else {
+            DispatchQueue.main.async {
+                self.logs.append(line)
+                if self.logs.count > 100 { self.logs.removeFirst() }
+            }
         }
     }
 
@@ -271,8 +277,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         addLog("🔔 [\(appName)] \(title)")
 
-        let titleBytes  = Array(title.utf8.prefix(31))   // fixstr max 31 bytes
-        let bodyBytes   = Array(body.utf8.prefix(31))
+        let cleanTitle  = cleanForWatch(title)
+        let cleanBody   = cleanForWatch(body)
+        let titleBytes  = Array(cleanTitle.utf8.prefix(31))
+        let bodyBytes   = Array(cleanBody.utf8.prefix(31))
         let bundleBytes = Array(bundleID(for: appName).utf8.prefix(31))
 
         let hasBody = !body.isEmpty
@@ -337,6 +345,44 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         packet += payload
 
         writeToWatch(bytes: packet)
+    }
+
+    // MARK: - Nettoyage du texte pour la montre (ASCII uniquement)
+    func cleanForWatch(_ text: String) -> String {
+        let accentMap: [Character: String] = [
+            "à": "a", "â": "a", "ä": "a", "á": "a", "ã": "a",
+            "è": "e", "ê": "e", "ë": "e", "é": "e",
+            "î": "i", "ï": "i", "í": "i", "ì": "i",
+            "ô": "o", "ö": "o", "ó": "o", "ò": "o", "õ": "o",
+            "û": "u", "ü": "u", "ú": "u", "ù": "u",
+            "ç": "c", "ñ": "n", "ý": "y", "ÿ": "y",
+            "À": "A", "Â": "A", "Ä": "A", "Á": "A",
+            "È": "E", "Ê": "E", "Ë": "E", "É": "E",
+            "Î": "I", "Ï": "I", "Í": "I",
+            "Ô": "O", "Ö": "O", "Ó": "O",
+            "Û": "U", "Ü": "U", "Ú": "U",
+            "Ç": "C", "Ñ": "N",
+            "\u{2019}": "'",
+            "\u{201C}": "\"",
+            "\u{201D}": "\"",
+            "\u{2013}": "-",
+            "\u{2014}": "-",
+            "\u{2026}": "...",
+        ]
+        var result = ""
+        for char in text {
+            if let replacement = accentMap[char] {
+                result += replacement
+            } else if char.isASCII {
+                result.append(char)
+            }
+            // Emojis et caractères non-ASCII supprimés
+        }
+        return result
+            .components(separatedBy: .whitespaces)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - Bundle IDs réels (confirmés dans le log : "com.whatsapp")
